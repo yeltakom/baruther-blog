@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>barutherstr. 18</title>
     <meta name="robots" content="noindex, nofollow">
+    <title>barutherstr. 18</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -18,36 +18,83 @@
         </div>
     </div>
 
-    <!-- Main Content (hidden until password correct) -->
+    <!-- Main Content -->
     <div id="main-content" class="content-hidden">
         
+        <!-- Header with Navigation -->
         <header>
             <h1 class="site-title">barutherstr. 18</h1>
+            <nav>
+                <a href="#feed" class="nav-link active" data-section="feed">Feed</a>
+                <a href="#about" class="nav-link" data-section="about">About</a>
+                <a href="#residents" class="nav-link" data-section="residents">Residents</a>
+            </nav>
         </header>
 
-        <main class="gallery">
+        <main>
             
-            <!-- ADD YOUR IMAGES HERE -->
-            <!-- Copy/paste this image block for each photo you want to add: -->
-            
-            <div class="image-container">
-                <img src="your-image-1.jpg" alt="">
-            </div>
+            <!-- FEED SECTION (Photo Gallery) -->
+            <section id="feed-section" class="section active">
+                <div class="gallery">
+                    
+                    <!-- ADD YOUR IMAGES HERE -->
+                    <!-- Copy this block for each photo: -->
+                    
+                    <div class="image-container">
+                        <img src="photo-1.jpg" alt="">
+                    </div>
 
-            <div class="image-container">
-                <img src="your-image-2.jpg" alt="">
-            </div>
+                    <div class="image-container">
+                        <img src="photo-2.jpg" alt="">
+                    </div>
 
-            <div class="image-container">
-                <img src="your-image-3.jpg" alt="">
-            </div>
+                    <div class="image-container">
+                        <img src="photo-3.jpg" alt="">
+                    </div>
 
-            <!-- Continue adding more images by copying the block above -->
-            
+                    <!-- Continue adding images... -->
+                    
+                </div>
+            </section>
+
+            <!-- ABOUT SECTION -->
+            <section id="about-section" class="section">
+                <div class="content-block">
+                    <h2>About</h2>
+                    <p>
+                        barutherstr. 18 is a private archive of moments, spaces, and encounters.
+                    </p>
+                    <p>
+                        This space exists as a container for images that matter—shared only with those who have access.
+                    </p>
+                    <!-- Edit text above as you like -->
+                </div>
+            </section>
+
+            <!-- RESIDENTS SECTION -->
+            <section id="residents-section" class="section">
+                <div class="content-block">
+                    <h2>Residents</h2>
+                    
+                    <div class="resident-item">
+                        <h3>Name Surname</h3>
+                        <p>Role / Description</p>
+                    </div>
+
+                    <div class="resident-item">
+                        <h3>Another Person</h3>
+                        <p>Another role</p>
+                    </div>
+
+                    <!-- Add more residents by copying the block above -->
+                    
+                </div>
+            </section>
+
         </main>
 
         <footer>
-            <p>© 2026</p>
+            <p>© 2026 barutherstr. 18</p>
         </footer>
 
     </div>
