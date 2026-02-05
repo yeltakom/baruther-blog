@@ -125,11 +125,81 @@ header {
     border-bottom: 1px solid var(--border-color);
 }
 
-/* Gallery */
-.gallery {
+/* Navigation */
+.main-nav {
+    margin-top: 2rem;
+    display: flex;
+    justify-content: center;
+    gap: 2rem;
+}
+
+.nav-link {
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 0.875rem;
+    color: var(--secondary-text);
+    text-decoration: none;
+    letter-spacing: 0.1em;
+    transition: color 0.3s ease;
+}
+
+.nav-link:hover {
+    color: var(--primary-text);
+}
+
+/* Sections */
+.section {
     max-width: 800px;
     margin: 0 auto;
     padding: 4rem 2rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.section:last-of-type {
+    border-bottom: none;
+}
+
+.section-title {
+    font-family: Georgia, serif;
+    font-weight: 400;
+    font-size: 1.5rem;
+    letter-spacing: 0.02em;
+    margin-bottom: 2rem;
+    color: var(--primary-text);
+}
+
+/* About Section */
+.about-content p {
+    font-size: 1rem;
+    line-height: 1.8;
+    color: var(--secondary-text);
+    margin-bottom: 1rem;
+}
+
+.about-content p:last-child {
+    margin-bottom: 0;
+}
+
+/* Residents Section */
+.residents-content {
+    font-size: 1rem;
+    line-height: 1.8;
+    color: var(--secondary-text);
+}
+
+/* Placeholder Text */
+.placeholder-text {
+    font-size: 0.875rem;
+    color: var(--secondary-text);
+    font-style: italic;
+    text-align: center;
+    padding: 2rem 0;
+}
+
+/* Gallery */
+.gallery {
+    max-width: 100%;
+    margin: 0;
+    padding: 0;
 }
 
 .image-container {
@@ -186,15 +256,27 @@ footer {
     .gallery {
         padding: 3rem 1.5rem;
     }
-    
+
     .image-container {
         margin-bottom: 4rem;
     }
-    
+
     header {
         padding: 3rem 1.5rem;
     }
-    
+
+    .main-nav {
+        gap: 1.5rem;
+    }
+
+    .nav-link {
+        font-size: 0.8rem;
+    }
+
+    .section {
+        padding: 3rem 1.5rem;
+    }
+
     footer {
         padding: 3rem 1.5rem 4rem;
     }

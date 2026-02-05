@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    
+
     <!-- Password Screen -->
     <div id="password-screen" class="password-container">
         <div class="password-box">
@@ -20,34 +20,54 @@
 
     <!-- Main Content (hidden until password correct) -->
     <div id="main-content" class="content-hidden">
-        
+
         <header>
             <h1 class="site-title">barutherstr. 18</h1>
+            <nav class="main-nav">
+                <a href="#photos" class="nav-link">photos</a>
+                <a href="#about" class="nav-link">about</a>
+                <a href="#residents" class="nav-link">residents</a>
+            </nav>
         </header>
 
-        <main class="gallery">
-            
-            <!-- ADD YOUR IMAGES HERE -->
-            <!-- Copy/paste this image block for each photo you want to add: -->
-            
-            <div class="image-container">
-                <img src="your-image-1.jpg" alt="">
-            </div>
+        <!-- Photos Section -->
+        <section id="photos" class="section">
+            <h2 class="section-title">photos</h2>
+            <main class="gallery">
 
-            <div class="image-container">
-                <img src="your-image-2.jpg" alt="">
-            </div>
+                <!-- ADD YOUR IMAGES HERE -->
+                <!-- Upload image files to the repository, then add blocks like this: -->
+                <!--
+                <div class="image-container">
+                    <img src="your-image.jpg" alt="">
+                </div>
+                -->
 
-            <div class="image-container">
-                <img src="your-image-3.jpg" alt="">
-            </div>
+                <p class="placeholder-text">photos coming soon</p>
 
-            <!-- Continue adding more images by copying the block above -->
-            
-        </main>
+            </main>
+        </section>
+
+        <!-- About Section -->
+        <section id="about" class="section">
+            <h2 class="section-title">about</h2>
+            <div class="about-content">
+                <p>barutherstr. 18 is a private visual archive.</p>
+                <p>A space for documenting moments, places, and encounters shared with friends.</p>
+            </div>
+        </section>
+
+        <!-- Residents Section -->
+        <section id="residents" class="section">
+            <h2 class="section-title">residents</h2>
+            <div class="residents-content">
+                <!-- Add resident information here -->
+                <p class="placeholder-text">to be updated</p>
+            </div>
+        </section>
 
         <footer>
-            <p>© 2026</p>
+            <p>&copy; 2026</p>
         </footer>
 
     </div>
