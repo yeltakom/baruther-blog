@@ -1,0 +1,215 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+:root {
+    --primary-bg: #ffffff;
+    --primary-text: #1a1a1a;
+    --secondary-text: #666666;
+    --border-color: #e0e0e0;
+    --spacing-unit: 1.5rem;
+}
+
+body {
+    font-family: Arial, Helvetica, sans-serif;
+    background-color: var(--primary-bg);
+    color: var(--primary-text);
+    line-height: 1.6;
+    font-weight: 400;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+/* Typography */
+.site-title {
+    font-family: Georgia, serif;
+    font-weight: 400;
+    font-size: clamp(2rem, 5vw, 3.5rem);
+    letter-spacing: 0.02em;
+    margin: 0;
+}
+
+/* Password Screen */
+.password-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: var(--primary-bg);
+    z-index: 1000;
+    transition: opacity 0.6s ease, visibility 0.6s ease;
+}
+
+.password-container.fade-out {
+    opacity: 0;
+    visibility: hidden;
+}
+
+.password-box {
+    text-align: center;
+    max-width: 400px;
+    width: 90%;
+}
+
+.password-box .site-title {
+    margin-bottom: 3rem;
+}
+
+#password-input {
+    width: 100%;
+    padding: 1rem 1.5rem;
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 1rem;
+    font-weight: 400;
+    border: 1px solid var(--border-color);
+    background-color: transparent;
+    color: var(--primary-text);
+    text-align: center;
+    letter-spacing: 0.05em;
+    transition: border-color 0.3s ease;
+    outline: none;
+}
+
+#password-input:focus {
+    border-color: var(--primary-text);
+}
+
+#password-input::placeholder {
+    color: var(--secondary-text);
+    opacity: 0.6;
+}
+
+#error-message {
+    margin-top: 1rem;
+    font-size: 0.875rem;
+    color: #999;
+    letter-spacing: 0.05em;
+    transition: opacity 0.3s ease;
+}
+
+.error-hidden {
+    opacity: 0;
+}
+
+/* Main Content */
+.content-hidden {
+    display: none;
+}
+
+.content-visible {
+    display: block;
+    animation: fadeIn 0.8s ease;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Header */
+header {
+    text-align: center;
+    padding: 4rem 2rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+/* Gallery */
+.gallery {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 4rem 2rem;
+}
+
+.image-container {
+    margin-bottom: 6rem;
+    opacity: 0;
+    animation: imageReveal 1s ease forwards;
+}
+
+.image-container:nth-child(1) { animation-delay: 0.1s; }
+.image-container:nth-child(2) { animation-delay: 0.2s; }
+.image-container:nth-child(3) { animation-delay: 0.3s; }
+.image-container:nth-child(4) { animation-delay: 0.4s; }
+.image-container:nth-child(5) { animation-delay: 0.5s; }
+.image-container:nth-child(6) { animation-delay: 0.6s; }
+.image-container:nth-child(7) { animation-delay: 0.7s; }
+.image-container:nth-child(8) { animation-delay: 0.8s; }
+.image-container:nth-child(9) { animation-delay: 0.9s; }
+.image-container:nth-child(10) { animation-delay: 1s; }
+
+@keyframes imageReveal {
+    from {
+        opacity: 0;
+        transform: translateY(30px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.image-container img {
+    width: 100%;
+    height: auto;
+    display: block;
+    transition: opacity 0.3s ease;
+}
+
+.image-container img:hover {
+    opacity: 0.85;
+}
+
+/* Footer */
+footer {
+    text-align: center;
+    padding: 4rem 2rem 6rem;
+    border-top: 1px solid var(--border-color);
+    font-size: 0.875rem;
+    color: var(--secondary-text);
+    letter-spacing: 0.05em;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .gallery {
+        padding: 3rem 1.5rem;
+    }
+    
+    .image-container {
+        margin-bottom: 4rem;
+    }
+    
+    header {
+        padding: 3rem 1.5rem;
+    }
+    
+    footer {
+        padding: 3rem 1.5rem 4rem;
+    }
+}
+
+/* Subtle grain texture overlay */
+body::before {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 400 400' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+    opacity: 0.015;
+    pointer-events: none;
+    z-index: 9999;
+}
