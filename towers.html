@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Kule Radar - Baz Istasyonu Gorsellestiricisi</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="towers.css">
+</head>
+<body>
+    <!-- Splash / API Key Screen -->
+    <div id="setup-screen">
+        <div class="setup-box">
+            <div class="setup-header">
+                <div class="radar-icon">
+                    <div class="radar-ring r1"></div>
+                    <div class="radar-ring r2"></div>
+                    <div class="radar-ring r3"></div>
+                    <div class="radar-dot"></div>
+                </div>
+                <h1>Kule Radar</h1>
+                <p class="subtitle">Cevrendeki baz istasyonlarini kesfet</p>
+            </div>
+            <div class="setup-form">
+                <label for="api-key-input">OpenCelliD API Anahtari</label>
+                <input type="text" id="api-key-input" placeholder="pk.xxxxxxxxxxxxxxxx" autocomplete="off">
+                <p class="hint">
+                    Ucretsiz anahtar almak icin:
+                    <a href="https://opencellid.org/" target="_blank" rel="noopener">opencellid.org</a>
+                    adresinden kayit olun.
+                </p>
+                <button id="start-btn">Basla</button>
+                <button id="demo-btn" class="btn-secondary">Demo Modda Dene</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main App -->
+    <div id="app" class="app-hidden">
+        <!-- Map -->
+        <div id="map"></div>
+
+        <!-- Top Bar -->
+        <div id="top-bar">
+            <div class="top-bar-left">
+                <div class="pulse-dot"></div>
+                <span id="status-text">Konum aliniyor...</span>
+            </div>
+            <div class="top-bar-right">
+                <button id="btn-refresh" title="Yenile">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M23 4v6h-6M1 20v-6h6"/>
+                        <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+                    </svg>
+                </button>
+                <button id="btn-locate" title="Konumuma Git">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>
+                    </svg>
+                </button>
+                <button id="btn-layers" title="Katmanlar">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polygon points="12 2 2 7 12 12 22 7 12 2"/>
+                        <polyline points="2 17 12 22 22 17"/>
+                        <polyline points="2 12 12 17 22 12"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- Stats Panel -->
+        <div id="stats-panel">
+            <div class="stat-item">
+                <span class="stat-value" id="stat-total">-</span>
+                <span class="stat-label">Toplam Kule</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-value stat-5g" id="stat-5g">-</span>
+                <span class="stat-label">5G/NR</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-value stat-4g" id="stat-4g">-</span>
+                <span class="stat-label">4G/LTE</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-value stat-3g" id="stat-3g">-</span>
+                <span class="stat-label">3G</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-value stat-2g" id="stat-2g">-</span>
+                <span class="stat-label">2G</span>
+            </div>
+        </div>
+
+        <!-- Layer Control Panel -->
+        <div id="layer-panel" class="panel-hidden">
+            <h3>Katmanlar</h3>
+            <label class="layer-toggle">
+                <input type="checkbox" id="layer-coverage" checked>
+                <span class="toggle-slider"></span>
+                Kapsama Alanlari
+            </label>
+            <label class="layer-toggle">
+                <input type="checkbox" id="layer-5g" checked>
+                <span class="toggle-slider"></span>
+                <span class="dot dot-5g"></span> 5G / NR
+            </label>
+            <label class="layer-toggle">
+                <input type="checkbox" id="layer-4g" checked>
+                <span class="toggle-slider"></span>
+                <span class="dot dot-4g"></span> 4G / LTE
+            </label>
+            <label class="layer-toggle">
+                <input type="checkbox" id="layer-3g" checked>
+                <span class="toggle-slider"></span>
+                <span class="dot dot-3g"></span> 3G / UMTS
+            </label>
+            <label class="layer-toggle">
+                <input type="checkbox" id="layer-2g" checked>
+                <span class="toggle-slider"></span>
+                <span class="dot dot-2g"></span> 2G / GSM
+            </label>
+            <h3 style="margin-top:1rem">Yaricap</h3>
+            <div class="range-control">
+                <input type="range" id="search-radius" min="1" max="10" value="3" step="1">
+                <span id="radius-label">3 km</span>
+            </div>
+        </div>
+
+        <!-- Tower Detail Panel -->
+        <div id="detail-panel" class="panel-hidden">
+            <button id="detail-close">&times;</button>
+            <h3 id="detail-title">Kule Detayi</h3>
+            <div id="detail-body"></div>
+        </div>
+
+        <!-- Legend -->
+        <div id="legend">
+            <div class="legend-item"><span class="legend-color" style="background:#e74c3c"></span>5G</div>
+            <div class="legend-item"><span class="legend-color" style="background:#3498db"></span>4G</div>
+            <div class="legend-item"><span class="legend-color" style="background:#f39c12"></span>3G</div>
+            <div class="legend-item"><span class="legend-color" style="background:#95a5a6"></span>2G</div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="towers.js"></script>
+</body>
+</html>
