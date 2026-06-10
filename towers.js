@@ -193,8 +193,11 @@
     let quadBuf, circleBuf, towerBuf, userBuf;
     const CIRCLE_SEGS = 96;
     let towerVertCount = 0;
+    let glReady = false;
 
     function initGL() {
+        if (glReady) return;
+        glReady = true;
         gridProg = makeProgram(gridVS, gridFS);
         pointProg = makeProgram(pointVS, pointFS);
         circleProg = makeProgram(circleVS, circleFS);
@@ -235,6 +238,7 @@
 
     // Interleaved [x, y, sizePx, phase] per tower.
     function rebuildTowerBuffer() {
+        if (!glReady) return;
         const vis = visibleTowers();
         const data = new Float32Array(vis.length * 4);
         vis.forEach((t, i) => {
@@ -641,9 +645,13 @@
             return;
         }
         started = true;
+        startLocation();
+    }
+
+    // The latent map renders from the first frame — access only adds data.
+    if (gl) {
         initGL();
         startLoop();
-        startLocation();
     }
 
     $('btn-access').addEventListener('click', (e) => {
