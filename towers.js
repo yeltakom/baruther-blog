@@ -62,9 +62,16 @@
     // ══════════════════════════════════════════
     //  WebGL
     // ══════════════════════════════════════════
-    const gl = canvas.getContext('webgl', { antialias: true, alpha: false });
+    const glOpts = { antialias: true, alpha: false };
+    const gl = canvas.getContext('webgl', glOpts)
+        || canvas.getContext('webgl2', glOpts)
+        || canvas.getContext('experimental-webgl', glOpts);
+
+    // Canvas 2D fallback for browsers without WebGL (e.g. Safari Lockdown Mode)
+    let ctx2d = null;
     if (!gl) {
-        $('gl-error').hidden = false;
+        ctx2d = canvas.getContext('2d');
+        if (!ctx2d) $('gl-error').hidden = false;
     }
 
     function compile(type, src) {
@@ -193,8 +200,11 @@
     let quadBuf, circleBuf, towerBuf, userBuf;
     const CIRCLE_SEGS = 96;
     let towerVertCount = 0;
+    let glReady = false;
 
     function initGL() {
+        if (!gl || glReady) return;
+        glReady = true;
         gridProg = makeProgram(gridVS, gridFS);
         pointProg = makeProgram(pointVS, pointFS);
         circleProg = makeProgram(circleVS, circleFS);
@@ -235,6 +245,7 @@
 
     // Interleaved [x, y, sizePx, phase] per tower.
     function rebuildTowerBuffer() {
+        if (!glReady) return;
         const vis = visibleTowers();
         const data = new Float32Array(vis.length * 4);
         vis.forEach((t, i) => {
@@ -285,6 +296,12 @@
     function frame(tMs) {
         const t = tMs / 1000;
         resize();
+        if (gl) frameGL(t);
+        else if (ctx2d) frame2D(t);
+        requestAnimationFrame(frame);
+    }
+
+    function frameGL(t) {
         gl.viewport(0, 0, canvas.width, canvas.height);
 
         // background pass (opaque)
@@ -349,8 +366,82 @@
             bindPointAttribs(pointProg, userBuf, 16);
             gl.drawArrays(gl.POINTS, 0, 1);
         }
+    }
 
-        requestAnimationFrame(frame);
+    // ── Canvas 2D fallback renderer ──
+    function frame2D(t) {
+        const c = ctx2d, W = canvas.width, H = canvas.height;
+        const toX = (wx) => (wx - center[0]) * scale + W / 2;
+        const toY = (wy) => H / 2 - (wy - center[1]) * scale;
+        const TAU = Math.PI * 2;
+
+        c.fillStyle = '#000';
+        c.fillRect(0, 0, W, H);
+
+        drawGrid2D(c, W, H, 250, 'rgba(255,255,255,0.10)');
+        drawGrid2D(c, W, H, 1000, 'rgba(255,255,255,0.08)');
+
+        const vis = visibleTowers();
+        c.lineWidth = 1;
+
+        if ($('f-coverage').checked) {
+            c.strokeStyle = 'rgba(255,255,255,0.07)';
+            for (const tw of vis) {
+                c.beginPath();
+                c.arc(toX(tw.wx), toY(tw.wy), tw.range * scale, 0, TAU);
+                c.stroke();
+            }
+        }
+
+        if (selected) {
+            for (let i = 0; i < 3; i++) {
+                const p = (t * 0.45 + i / 3) % 1;
+                c.strokeStyle = `rgba(255,255,255,${(1 - p) * 0.7})`;
+                c.beginPath();
+                c.arc(toX(selected.wx), toY(selected.wy), p * selected.range * scale, 0, TAU);
+                c.stroke();
+            }
+        }
+
+        if (userWorld) {
+            const p = (t * 0.3) % 1;
+            c.strokeStyle = `rgba(255,255,255,${(1 - p) * 0.4})`;
+            c.beginPath();
+            c.arc(toX(userWorld[0]), toY(userWorld[1]), p * 400 * scale, 0, TAU);
+            c.stroke();
+        }
+
+        for (const tw of vis) {
+            const pulse = 0.75 + 0.25 * Math.sin(t * 2.5 + tw.phase * TAU);
+            const x = toX(tw.wx), y = toY(tw.wy);
+            const r = (2.5 + Math.min(2, Math.log2(1 + (tw.samples || 0)) * 0.3)) * dpr * pulse;
+            c.fillStyle = 'rgba(255,255,255,0.25)';
+            c.beginPath(); c.arc(x, y, r * 2.2, 0, TAU); c.fill();
+            c.fillStyle = '#fff';
+            c.beginPath(); c.arc(x, y, r, 0, TAU); c.fill();
+        }
+
+        if (userWorld) {
+            c.fillStyle = '#fff';
+            c.beginPath();
+            c.arc(toX(userWorld[0]), toY(userWorld[1]), 5 * dpr, 0, TAU);
+            c.fill();
+        }
+    }
+
+    function drawGrid2D(c, W, H, stepM, style) {
+        const step = stepM * scale;
+        if (step < 8) return;
+        c.strokeStyle = style;
+        c.lineWidth = 1;
+        const x0 = ((W / 2 - center[0] * scale) % step + step) % step;
+        for (let x = x0; x < W; x += step) {
+            c.beginPath(); c.moveTo(x, 0); c.lineTo(x, H); c.stroke();
+        }
+        const y0 = ((H / 2 + center[1] * scale) % step + step) % step;
+        for (let y = y0; y < H; y += step) {
+            c.beginPath(); c.moveTo(0, y); c.lineTo(W, y); c.stroke();
+        }
     }
 
     // ── Map interaction ──
@@ -438,18 +529,29 @@
             const bbox = getBBox(lat, lng, searchRadiusKm);
             const url = `https://opencellid.org/cell/getInArea?key=${encodeURIComponent(apiKey)}`
                 + `&BBOX=${bbox}&format=json&limit=1000`;
-            const resp = await fetch(url);
-            if (!resp.ok) {
-                setStatus(resp.status === 403 ? 'Invalid API key' : `Error ${resp.status}`);
-                return;
-            }
-            const data = await resp.json();
+            const data = await fetchJSON(url);
             towers = (data.cells || []).map(parseCell);
             onTowersLoaded();
             setStatus(`${towers.length} towers registered`);
         } catch (e) {
             console.error(e);
-            setStatus('Connection failed');
+            if (e.status === 403) setStatus('Invalid API key');
+            else if (e.status) setStatus(`Error ${e.status}`);
+            else setStatus('Connection failed');
+        }
+    }
+
+    // Direct fetch first; if it fails on CORS/network, retry through a CORS proxy.
+    async function fetchJSON(url) {
+        try {
+            const r = await fetch(url);
+            if (!r.ok) throw Object.assign(new Error(`HTTP ${r.status}`), { status: r.status });
+            return await r.json();
+        } catch (e) {
+            if (e.status) throw e;
+            const r = await fetch('https://api.allorigins.win/raw?url=' + encodeURIComponent(url));
+            if (!r.ok) throw Object.assign(new Error(`HTTP ${r.status}`), { status: r.status });
+            return await r.json();
         }
     }
 
@@ -641,10 +743,12 @@
             return;
         }
         started = true;
-        initGL();
-        startLoop();
         startLocation();
     }
+
+    // The latent map renders from the first frame — access only adds data.
+    initGL();
+    if (gl || ctx2d) startLoop();
 
     $('btn-access').addEventListener('click', (e) => {
         e.preventDefault();
