@@ -1,5 +1,12 @@
-// Password configuration
-const CORRECT_PASSWORD = 'baruther';
+// Password configuration — SHA-256 hash of the password (plaintext is not stored).
+// To change it, run in the browser console:
+//   crypto.subtle.digest('SHA-256', new TextEncoder().encode('newpassword')).then(b => console.log([...new Uint8Array(b)].map(x => x.toString(16).padStart(2,'0')).join('')))
+const PASSWORD_HASH = 'bd5e82f530135131fa5a564b40d24ae41ac77402570930c7bc2d863d17fac8a8';
+
+async function hashText(text) {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+    return [...new Uint8Array(buf)].map((x) => x.toString(16).padStart(2, '0')).join('');
+}
 
 // Get elements
 const passwordScreen = document.getElementById('password-screen');
@@ -23,10 +30,10 @@ passwordInput.addEventListener('input', function() {
     errorMessage.classList.add('error-hidden');
 });
 
-function checkPassword() {
+async function checkPassword() {
     const enteredPassword = passwordInput.value;
-    
-    if (enteredPassword === CORRECT_PASSWORD) {
+
+    if (await hashText(enteredPassword) === PASSWORD_HASH) {
         sessionStorage.setItem('authenticated', 'true');
         showMainContent();
     } else {
