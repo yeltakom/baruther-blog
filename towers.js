@@ -1,13 +1,15 @@
 // TOWER BUREAU — a latent signal map
-// Raw WebGL renderer: procedural grid + grain, pulsing tower points,
-// coverage rings, animated signal ripples. Data: OpenCelliD.
+// Experimental WebGL 3D renderer: perspective camera orbiting a procedural
+// ground grid, towers as glowing signal beams, animated ripples and sweep.
+// Falls back to a Canvas 2D top-down view when WebGL is unavailable.
+// Data: OpenCelliD.
 (function () {
     'use strict';
 
     // ── Constants ──
     const METERS_PER_DEG_LAT = 110540;
-    const TECHS = ['5G', '4G', '3G', '2G'];
     const DEFAULT_RANGE = { '5G': 500, '4G': 1000, '3G': 2000, '2G': 5000 };
+    const TAU = Math.PI * 2;
 
     function classifyRadio(radio) {
         if (!radio) return '2G';
@@ -28,16 +30,22 @@
     let apiKey = '';
     let demoMode = false;
     let started = false;
-    let origin = null;          // {lat, lng} — projection origin
-    let userWorld = null;       // [x, y] meters from origin
-    let towers = [];            // parsed tower records with .wx/.wy
+    let origin = null;          // {lat, lng} projection origin
+    let userWorld = null;       // [x, y] meters
+    let towers = [];
     let selected = null;
     let searchRadiusKm = 3;
     let watchId = null;
 
-    // view
-    let center = [0, 0];        // meters
-    let scale = 0.15;           // device px per meter
+    // shared view target (3D camera target / 2D pan center)
+    let center = [0, 0];
+    // 3D camera
+    let camAz = 0.7;            // azimuth, rad
+    let camEl = 0.85;           // elevation, rad
+    let camDist = 4200;         // meters
+    // 2D fallback view
+    let scale2d = 0.15;         // device px per meter
+
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
 
     // ── DOM ──
@@ -53,14 +61,17 @@
         statusEl.textContent = msg.toUpperCase();
     }
 
-    // ── Projection ──
     function project(lat, lng) {
         const mPerDegLng = METERS_PER_DEG_LAT * Math.cos(origin.lat * Math.PI / 180);
         return [(lng - origin.lng) * mPerDegLng, (lat - origin.lat) * METERS_PER_DEG_LAT];
     }
 
+    function beamHeight(t) {
+        return 80 + Math.min(900, (t.range || 500) * 0.18);
+    }
+
     // ══════════════════════════════════════════
-    //  WebGL
+    //  Context
     // ══════════════════════════════════════════
     const glOpts = { antialias: true, alpha: false };
     function tryContext(type) {
@@ -68,14 +79,185 @@
     }
     const gl = tryContext('webgl') || tryContext('webgl2') || tryContext('experimental-webgl');
 
-    // Canvas 2D fallback for browsers without WebGL (e.g. Safari Lockdown Mode)
     let ctx2d = null;
     if (!gl) {
-        try { ctx2d = canvas.getContext('2d'); } catch (e) { /* no canvas at all */ }
-        if (!ctx2d) $('gl-error').hidden = false;
+        try { ctx2d = canvas.getContext('2d'); } catch (e) { /* nothing */ }
     }
     $('gl-error').hidden = !!(gl || ctx2d);
-    setStatus(gl ? 'Standby — WebGL' : (ctx2d ? 'Standby — 2D mode' : 'No canvas support'));
+    setStatus(gl ? 'Standby — WebGL 3D' : (ctx2d ? 'Standby — 2D mode' : 'No canvas support'));
+
+    // ══════════════════════════════════════════
+    //  Mat4 helpers (column-major)
+    // ══════════════════════════════════════════
+    function mat4Mul(a, b) {
+        const o = new Float32Array(16);
+        for (let c = 0; c < 4; c++) {
+            for (let r = 0; r < 4; r++) {
+                o[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1]
+                    + a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
+            }
+        }
+        return o;
+    }
+
+    function mat4Perspective(fovy, aspect, near, far) {
+        const f = 1 / Math.tan(fovy / 2), nf = 1 / (near - far);
+        return new Float32Array([
+            f / aspect, 0, 0, 0,
+            0, f, 0, 0,
+            0, 0, (far + near) * nf, -1,
+            0, 0, 2 * far * near * nf, 0,
+        ]);
+    }
+
+    function mat4LookAt(eye, target, up) {
+        let zx = eye[0] - target[0], zy = eye[1] - target[1], zz = eye[2] - target[2];
+        let l = Math.hypot(zx, zy, zz); zx /= l; zy /= l; zz /= l;
+        let xx = up[1] * zz - up[2] * zy, xy = up[2] * zx - up[0] * zz, xz = up[0] * zy - up[1] * zx;
+        l = Math.hypot(xx, xy, xz) || 1; xx /= l; xy /= l; xz /= l;
+        const yx = zy * xz - zz * xy, yy = zz * xx - zx * xz, yz = zx * xy - zy * xx;
+        return new Float32Array([
+            xx, yx, zx, 0,
+            xy, yy, zy, 0,
+            xz, yz, zz, 0,
+            -(xx * eye[0] + xy * eye[1] + xz * eye[2]),
+            -(yx * eye[0] + yy * eye[1] + yz * eye[2]),
+            -(zx * eye[0] + zy * eye[1] + zz * eye[2]),
+            1,
+        ]);
+    }
+
+    // ══════════════════════════════════════════
+    //  Shaders
+    // ══════════════════════════════════════════
+    const groundVS = `
+        attribute vec2 a_q;
+        uniform mat4 u_vp;
+        uniform vec2 u_target;
+        uniform float u_extent;
+        varying vec2 v_world;
+        void main() {
+            v_world = u_target + a_q * u_extent;
+            gl_Position = u_vp * vec4(v_world, 0.0, 1.0);
+        }
+    `;
+    const groundFS = `
+        precision mediump float;
+        varying vec2 v_world;
+        uniform vec2 u_target;
+        uniform float u_time;
+        uniform vec2 u_user;
+        uniform float u_hasUser;
+
+        float hash(vec2 p) {
+            return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+        }
+
+        void main() {
+            // survey grid: minor 250 m, major 1 km
+            vec2 q1 = abs(fract(v_world / 250.0) - 0.5) * 250.0;
+            vec2 q2 = abs(fract(v_world / 1000.0) - 0.5) * 1000.0;
+            float g = (1.0 - smoothstep(0.0, 6.0, min(q1.x, q1.y))) * 0.10
+                    + (1.0 - smoothstep(0.0, 10.0, min(q2.x, q2.y))) * 0.10;
+
+            // radar sweep around the observer
+            float sweep = 0.0;
+            if (u_hasUser > 0.5) {
+                vec2 d = v_world - u_user;
+                float ang = atan(d.y, d.x);
+                float beam = fract((ang + 3.14159265) / 6.2831853 - u_time * 0.05);
+                sweep = pow(1.0 - beam, 14.0) * 0.12 * smoothstep(4000.0, 200.0, length(d));
+            }
+
+            // grain
+            float n = hash(floor(v_world * 0.5) + floor(u_time * 9.0)) * 0.04;
+
+            // distance fade toward horizon
+            float fade = 1.0 - smoothstep(3500.0, 16000.0, length(v_world - u_target));
+
+            gl_FragColor = vec4(vec3((g + sweep + n) * fade), 1.0);
+        }
+    `;
+
+    // beams: vertical signal columns
+    const beamVS = `
+        attribute vec3 a_pos;
+        attribute float a_phase;
+        attribute float a_t;
+        uniform mat4 u_vp;
+        uniform float u_time;
+        varying float v_t;
+        varying float v_pulse;
+        void main() {
+            gl_Position = u_vp * vec4(a_pos, 1.0);
+            v_t = a_t;
+            v_pulse = 0.7 + 0.3 * sin(u_time * 2.0 + a_phase * 6.2831853);
+        }
+    `;
+    const beamFS = `
+        precision mediump float;
+        varying float v_t;
+        varying float v_pulse;
+        uniform float u_alpha;
+        void main() {
+            float a = (1.0 - v_t * 0.85) * u_alpha * v_pulse;
+            gl_FragColor = vec4(vec3(1.0), a);
+        }
+    `;
+
+    // points with perspective size attenuation
+    const pointVS = `
+        attribute vec3 a_pos;
+        attribute float a_size;
+        attribute float a_phase;
+        uniform mat4 u_vp;
+        uniform float u_time;
+        uniform float u_pscale;
+        varying float v_pulse;
+        void main() {
+            vec4 p = u_vp * vec4(a_pos, 1.0);
+            gl_Position = p;
+            v_pulse = 0.75 + 0.25 * sin(u_time * 2.5 + a_phase * 6.2831853);
+            gl_PointSize = clamp(a_size * u_pscale / max(p.w, 1.0), 2.0, 48.0) * v_pulse;
+        }
+    `;
+    const pointFS = `
+        precision mediump float;
+        uniform float u_alpha;
+        varying float v_pulse;
+        void main() {
+            float r = length(gl_PointCoord - 0.5);
+            float core = smoothstep(0.30, 0.10, r);
+            float halo = smoothstep(0.5, 0.0, r) * 0.35;
+            gl_FragColor = vec4(vec3(1.0), (core + halo) * u_alpha * v_pulse);
+        }
+    `;
+
+    // ground circles (coverage / ripples)
+    const circleVS = `
+        attribute vec2 a_unit;
+        uniform mat4 u_vp;
+        uniform vec2 u_world;
+        uniform float u_radius;
+        void main() {
+            gl_Position = u_vp * vec4(u_world + a_unit * u_radius, 0.0, 1.0);
+        }
+    `;
+    const circleFS = `
+        precision mediump float;
+        uniform float u_alpha;
+        void main() { gl_FragColor = vec4(vec3(1.0), u_alpha); }
+    `;
+
+    // ══════════════════════════════════════════
+    //  GL setup
+    // ══════════════════════════════════════════
+    let groundProg, beamProg, pointProg, circleProg;
+    let quadBuf, circleBuf, beamBuf, pointBuf, userBuf;
+    const CIRCLE_SEGS = 96;
+    let beamVertCount = 0, pointVertCount = 0;
+    let glReady = false;
+    let vpMat = null;
 
     function compile(type, src) {
         const sh = gl.createShader(type);
@@ -98,127 +280,23 @@
         return p;
     }
 
-    // ── Shaders ──
-    // Background: procedural survey grid, film grain, vignette, radar sweep.
-    const gridVS = `
-        attribute vec2 a_pos;
-        void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }
-    `;
-    const gridFS = `
-        precision mediump float;
-        uniform vec2 u_res;
-        uniform vec2 u_center;
-        uniform float u_scale;
-        uniform float u_time;
-        uniform vec2 u_user;
-        uniform float u_hasUser;
-
-        float hash(vec2 p) {
-            return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
-        }
-
-        void main() {
-            vec2 world = (gl_FragCoord.xy - u_res * 0.5) / u_scale + u_center;
-            float lw = 1.0 / u_scale;
-
-            // minor grid every 250 m, major every 1 km
-            vec2 q1 = abs(fract(world / 250.0) - 0.5) * 250.0;
-            vec2 q2 = abs(fract(world / 1000.0) - 0.5) * 1000.0;
-            float g = (1.0 - step(lw, min(q1.x, q1.y))) * 0.10
-                    + (1.0 - step(lw * 1.5, min(q2.x, q2.y))) * 0.08;
-
-            // radar sweep around the observer
-            float sweep = 0.0;
-            if (u_hasUser > 0.5) {
-                vec2 d = world - u_user;
-                float ang = atan(d.y, d.x);
-                float beam = fract((ang + 3.14159265) / 6.2831853 - u_time * 0.05);
-                float dist = length(d);
-                sweep = pow(1.0 - beam, 12.0) * 0.10 * smoothstep(3500.0, 200.0, dist);
-            }
-
-            // film grain
-            float n = hash(gl_FragCoord.xy + floor(u_time * 9.0)) * 0.05;
-
-            // vignette
-            vec2 uv = gl_FragCoord.xy / u_res - 0.5;
-            float vig = 1.0 - dot(uv, uv) * 0.85;
-
-            gl_FragColor = vec4(vec3((g + sweep) * vig + n), 1.0);
-        }
-    `;
-
-    // Towers as pulsing glow points.
-    const pointVS = `
-        attribute vec2 a_pos;
-        attribute float a_size;
-        attribute float a_phase;
-        uniform vec2 u_res;
-        uniform vec2 u_center;
-        uniform float u_scale;
-        uniform float u_time;
-        varying float v_pulse;
-        void main() {
-            vec2 px = (a_pos - u_center) * u_scale;
-            gl_Position = vec4(px / (u_res * 0.5), 0.0, 1.0);
-            v_pulse = 0.75 + 0.25 * sin(u_time * 2.5 + a_phase * 6.2831853);
-            gl_PointSize = a_size * v_pulse;
-        }
-    `;
-    const pointFS = `
-        precision mediump float;
-        uniform vec3 u_color;
-        uniform float u_alpha;
-        varying float v_pulse;
-        void main() {
-            float r = length(gl_PointCoord - 0.5);
-            float core = smoothstep(0.30, 0.12, r);
-            float halo = smoothstep(0.5, 0.0, r) * 0.35;
-            float a = (core + halo) * u_alpha * v_pulse;
-            gl_FragColor = vec4(u_color, a);
-        }
-    `;
-
-    // Unit circle (line loop), positioned/scaled per draw call.
-    const circleVS = `
-        attribute vec2 a_unit;
-        uniform vec2 u_res;
-        uniform vec2 u_center;
-        uniform float u_scale;
-        uniform vec2 u_world;
-        uniform float u_radius;
-        void main() {
-            vec2 w = u_world + a_unit * u_radius;
-            vec2 px = (w - u_center) * u_scale;
-            gl_Position = vec4(px / (u_res * 0.5), 0.0, 1.0);
-        }
-    `;
-    const circleFS = `
-        precision mediump float;
-        uniform float u_alpha;
-        void main() { gl_FragColor = vec4(vec3(1.0), u_alpha); }
-    `;
-
-    let gridProg, pointProg, circleProg;
-    let quadBuf, circleBuf, towerBuf, userBuf;
-    const CIRCLE_SEGS = 96;
-    let towerVertCount = 0;
-    let glReady = false;
-
     function initGL() {
         if (!gl || glReady) return;
         glReady = true;
-        gridProg = makeProgram(gridVS, gridFS);
+
+        groundProg = makeProgram(groundVS, groundFS);
+        beamProg = makeProgram(beamVS, beamFS);
         pointProg = makeProgram(pointVS, pointFS);
         circleProg = makeProgram(circleVS, circleFS);
 
         quadBuf = gl.createBuffer();
         gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
-        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+        gl.bufferData(gl.ARRAY_BUFFER,
+            new Float32Array([-1, -1, 1, -1, -1, 1, 1, -1, 1, 1, -1, 1]), gl.STATIC_DRAW);
 
         const circ = new Float32Array(CIRCLE_SEGS * 2);
         for (let i = 0; i < CIRCLE_SEGS; i++) {
-            const a = (i / CIRCLE_SEGS) * Math.PI * 2;
+            const a = (i / CIRCLE_SEGS) * TAU;
             circ[i * 2] = Math.cos(a);
             circ[i * 2 + 1] = Math.sin(a);
         }
@@ -226,8 +304,12 @@
         gl.bindBuffer(gl.ARRAY_BUFFER, circleBuf);
         gl.bufferData(gl.ARRAY_BUFFER, circ, gl.STATIC_DRAW);
 
-        towerBuf = gl.createBuffer();
+        beamBuf = gl.createBuffer();
+        pointBuf = gl.createBuffer();
         userBuf = gl.createBuffer();
+
+        gl.enable(gl.DEPTH_TEST);
+        gl.depthFunc(gl.LEQUAL);
     }
 
     function resize() {
@@ -246,40 +328,59 @@
         return towers.filter((t) => f[t.tech]);
     }
 
-    // Interleaved [x, y, sizePx, phase] per tower.
-    function rebuildTowerBuffer() {
+    function rebuildBuffers() {
         if (!glReady) return;
         const vis = visibleTowers();
-        const data = new Float32Array(vis.length * 4);
+
+        // beams: 2 verts each — [x, y, z, phase, t]
+        const beams = new Float32Array(vis.length * 2 * 5);
+        // points: base + top per tower — [x, y, z, size, phase]
+        const pts = new Float32Array(vis.length * 2 * 5);
+
         vis.forEach((t, i) => {
+            const h = beamHeight(t);
             const sampleBoost = Math.min(4, Math.log2(1 + (t.samples || 0)) * 0.6);
-            data[i * 4] = t.wx;
-            data[i * 4 + 1] = t.wy;
-            data[i * 4 + 2] = (5 + sampleBoost) * dpr;
-            data[i * 4 + 3] = t.phase;
+            let o = i * 10;
+            beams[o] = t.wx; beams[o + 1] = t.wy; beams[o + 2] = 0; beams[o + 3] = t.phase; beams[o + 4] = 0;
+            beams[o + 5] = t.wx; beams[o + 6] = t.wy; beams[o + 7] = h; beams[o + 8] = t.phase; beams[o + 9] = 1;
+
+            o = i * 10;
+            pts[o] = t.wx; pts[o + 1] = t.wy; pts[o + 2] = 0; pts[o + 3] = (5 + sampleBoost); pts[o + 4] = t.phase;
+            pts[o + 5] = t.wx; pts[o + 6] = t.wy; pts[o + 7] = h; pts[o + 8] = 3.5; pts[o + 9] = t.phase;
         });
-        gl.bindBuffer(gl.ARRAY_BUFFER, towerBuf);
-        gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
-        towerVertCount = vis.length;
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, beamBuf);
+        gl.bufferData(gl.ARRAY_BUFFER, beams, gl.DYNAMIC_DRAW);
+        beamVertCount = vis.length * 2;
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, pointBuf);
+        gl.bufferData(gl.ARRAY_BUFFER, pts, gl.DYNAMIC_DRAW);
+        pointVertCount = vis.length * 2;
     }
 
-    function bindPointAttribs(prog, buf, stride) {
-        gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-        const aPos = gl.getAttribLocation(prog, 'a_pos');
-        const aSize = gl.getAttribLocation(prog, 'a_size');
-        const aPhase = gl.getAttribLocation(prog, 'a_phase');
-        gl.enableVertexAttribArray(aPos);
-        gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, stride, 0);
-        gl.enableVertexAttribArray(aSize);
-        gl.vertexAttribPointer(aSize, 1, gl.FLOAT, false, stride, 8);
-        gl.enableVertexAttribArray(aPhase);
-        gl.vertexAttribPointer(aPhase, 1, gl.FLOAT, false, stride, 12);
+    function cameraEye() {
+        const ce = Math.cos(camEl), se = Math.sin(camEl);
+        return [
+            center[0] + camDist * ce * Math.sin(camAz),
+            center[1] - camDist * ce * Math.cos(camAz),
+            camDist * se,
+        ];
     }
 
-    function setViewUniforms(prog) {
-        gl.uniform2f(gl.getUniformLocation(prog, 'u_res'), canvas.width, canvas.height);
-        gl.uniform2f(gl.getUniformLocation(prog, 'u_center'), center[0], center[1]);
-        gl.uniform1f(gl.getUniformLocation(prog, 'u_scale'), scale);
+    function computeVP() {
+        const aspect = canvas.width / Math.max(1, canvas.height);
+        const proj = mat4Perspective(0.9, aspect, 10, 80000);
+        const view = mat4LookAt(cameraEye(), [center[0], center[1], 0], [0, 0, 1]);
+        vpMat = mat4Mul(proj, view);
+    }
+
+    function worldToScreen(x, y, z) {
+        const m = vpMat;
+        const cx = m[0] * x + m[4] * y + m[8] * z + m[12];
+        const cy = m[1] * x + m[5] * y + m[9] * z + m[13];
+        const cw = m[3] * x + m[7] * y + m[11] * z + m[15];
+        if (cw <= 0) return null;
+        return [(cx / cw * 0.5 + 0.5) * canvas.width, (1 - (cy / cw * 0.5 + 0.5)) * canvas.height];
     }
 
     function drawCircle(world, radius, alpha) {
@@ -306,77 +407,115 @@
 
     function frameGL(t) {
         gl.viewport(0, 0, canvas.width, canvas.height);
+        gl.clearColor(0, 0, 0, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        computeVP();
 
-        // background pass (opaque)
+        // ground (opaque, writes depth)
         gl.disable(gl.BLEND);
-        gl.useProgram(gridProg);
-        setViewUniforms(gridProg);
-        gl.uniform1f(gl.getUniformLocation(gridProg, 'u_time'), t);
-        gl.uniform1f(gl.getUniformLocation(gridProg, 'u_hasUser'), userWorld ? 1 : 0);
-        gl.uniform2f(gl.getUniformLocation(gridProg, 'u_user'),
+        gl.depthMask(true);
+        gl.useProgram(groundProg);
+        gl.uniformMatrix4fv(gl.getUniformLocation(groundProg, 'u_vp'), false, vpMat);
+        gl.uniform2f(gl.getUniformLocation(groundProg, 'u_target'), center[0], center[1]);
+        gl.uniform1f(gl.getUniformLocation(groundProg, 'u_extent'), 20000);
+        gl.uniform1f(gl.getUniformLocation(groundProg, 'u_time'), t);
+        gl.uniform1f(gl.getUniformLocation(groundProg, 'u_hasUser'), userWorld ? 1 : 0);
+        gl.uniform2f(gl.getUniformLocation(groundProg, 'u_user'),
             userWorld ? userWorld[0] : 0, userWorld ? userWorld[1] : 0);
         gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
-        const aQuad = gl.getAttribLocation(gridProg, 'a_pos');
-        gl.enableVertexAttribArray(aQuad);
-        gl.vertexAttribPointer(aQuad, 2, gl.FLOAT, false, 0, 0);
-        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        const aQ = gl.getAttribLocation(groundProg, 'a_q');
+        gl.enableVertexAttribArray(aQ);
+        gl.vertexAttribPointer(aQ, 2, gl.FLOAT, false, 0, 0);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
 
+        // transparent passes: additive, no depth write
         gl.enable(gl.BLEND);
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+        gl.depthMask(false);
 
-        // coverage rings
+        // ground circles
         gl.useProgram(circleProg);
-        setViewUniforms(circleProg);
+        gl.uniformMatrix4fv(gl.getUniformLocation(circleProg, 'u_vp'), false, vpMat);
+        gl.bindBuffer(gl.ARRAY_BUFFER, circleBuf);
+        const aU = gl.getAttribLocation(circleProg, 'a_unit');
+        gl.enableVertexAttribArray(aU);
+        gl.vertexAttribPointer(aU, 2, gl.FLOAT, false, 0, 0);
+
         if ($('f-coverage').checked) {
             for (const tw of visibleTowers()) {
-                drawCircle([tw.wx, tw.wy], tw.range, 0.07);
+                drawCircle([tw.wx, tw.wy], tw.range, 0.06);
             }
         }
-
-        // animated signal ripples: selected tower + observer
         if (selected) {
             for (let i = 0; i < 3; i++) {
-                const prog = (t * 0.45 + i / 3) % 1;
-                drawCircle([selected.wx, selected.wy], prog * selected.range, (1 - prog) * 0.7);
+                const p = (t * 0.45 + i / 3) % 1;
+                drawCircle([selected.wx, selected.wy], p * selected.range, (1 - p) * 0.7);
             }
         }
         if (userWorld) {
-            const prog = (t * 0.3) % 1;
-            drawCircle(userWorld, prog * 400, (1 - prog) * 0.4);
+            const p = (t * 0.3) % 1;
+            drawCircle(userWorld, p * 400, (1 - p) * 0.4);
         }
 
-        // tower points
-        if (towerVertCount > 0) {
-            gl.useProgram(pointProg);
-            setViewUniforms(pointProg);
-            gl.uniform1f(gl.getUniformLocation(pointProg, 'u_time'), t);
-            gl.uniform3f(gl.getUniformLocation(pointProg, 'u_color'), 1, 1, 1);
-            gl.uniform1f(gl.getUniformLocation(pointProg, 'u_alpha'), 0.95);
-            bindPointAttribs(pointProg, towerBuf, 16);
-            gl.drawArrays(gl.POINTS, 0, towerVertCount);
+        // beams
+        if (beamVertCount > 0) {
+            gl.useProgram(beamProg);
+            gl.uniformMatrix4fv(gl.getUniformLocation(beamProg, 'u_vp'), false, vpMat);
+            gl.uniform1f(gl.getUniformLocation(beamProg, 'u_time'), t);
+            gl.uniform1f(gl.getUniformLocation(beamProg, 'u_alpha'), 0.5);
+            gl.bindBuffer(gl.ARRAY_BUFFER, beamBuf);
+            const aP = gl.getAttribLocation(beamProg, 'a_pos');
+            const aPh = gl.getAttribLocation(beamProg, 'a_phase');
+            const aT = gl.getAttribLocation(beamProg, 'a_t');
+            gl.enableVertexAttribArray(aP);
+            gl.vertexAttribPointer(aP, 3, gl.FLOAT, false, 20, 0);
+            gl.enableVertexAttribArray(aPh);
+            gl.vertexAttribPointer(aPh, 1, gl.FLOAT, false, 20, 12);
+            gl.enableVertexAttribArray(aT);
+            gl.vertexAttribPointer(aT, 1, gl.FLOAT, false, 20, 16);
+            gl.drawArrays(gl.LINES, 0, beamVertCount);
         }
 
-        // observer point
+        // tower points (base + beacon)
+        if (pointVertCount > 0) {
+            drawPoints(pointBuf, pointVertCount, t, 0.9);
+        }
+
+        // observer
         if (userWorld) {
-            gl.useProgram(pointProg);
-            setViewUniforms(pointProg);
-            gl.uniform1f(gl.getUniformLocation(pointProg, 'u_time'), t);
-            gl.uniform3f(gl.getUniformLocation(pointProg, 'u_color'), 1, 1, 1);
-            gl.uniform1f(gl.getUniformLocation(pointProg, 'u_alpha'), 1.0);
             gl.bindBuffer(gl.ARRAY_BUFFER, userBuf);
             gl.bufferData(gl.ARRAY_BUFFER,
-                new Float32Array([userWorld[0], userWorld[1], 11 * dpr, 0]), gl.DYNAMIC_DRAW);
-            bindPointAttribs(pointProg, userBuf, 16);
-            gl.drawArrays(gl.POINTS, 0, 1);
+                new Float32Array([userWorld[0], userWorld[1], 0, 9, 0]), gl.DYNAMIC_DRAW);
+            drawPoints(userBuf, 1, t, 1.0);
         }
+
+        gl.depthMask(true);
     }
 
-    // ── Canvas 2D fallback renderer ──
+    function drawPoints(buf, count, t, alpha) {
+        gl.useProgram(pointProg);
+        gl.uniformMatrix4fv(gl.getUniformLocation(pointProg, 'u_vp'), false, vpMat);
+        gl.uniform1f(gl.getUniformLocation(pointProg, 'u_time'), t);
+        gl.uniform1f(gl.getUniformLocation(pointProg, 'u_alpha'), alpha);
+        gl.uniform1f(gl.getUniformLocation(pointProg, 'u_pscale'), canvas.height * 0.9);
+        gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+        const aP = gl.getAttribLocation(pointProg, 'a_pos');
+        const aS = gl.getAttribLocation(pointProg, 'a_size');
+        const aPh = gl.getAttribLocation(pointProg, 'a_phase');
+        gl.enableVertexAttribArray(aP);
+        gl.vertexAttribPointer(aP, 3, gl.FLOAT, false, 20, 0);
+        gl.enableVertexAttribArray(aS);
+        gl.vertexAttribPointer(aS, 1, gl.FLOAT, false, 20, 12);
+        gl.enableVertexAttribArray(aPh);
+        gl.vertexAttribPointer(aPh, 1, gl.FLOAT, false, 20, 16);
+        gl.drawArrays(gl.POINTS, 0, count);
+    }
+
+    // ── Canvas 2D fallback (top-down) ──
     function frame2D(t) {
         const c = ctx2d, W = canvas.width, H = canvas.height;
-        const toX = (wx) => (wx - center[0]) * scale + W / 2;
-        const toY = (wy) => H / 2 - (wy - center[1]) * scale;
-        const TAU = Math.PI * 2;
+        const toX = (wx) => (wx - center[0]) * scale2d + W / 2;
+        const toY = (wy) => H / 2 - (wy - center[1]) * scale2d;
 
         c.fillStyle = '#000';
         c.fillRect(0, 0, W, H);
@@ -391,7 +530,7 @@
             c.strokeStyle = 'rgba(255,255,255,0.07)';
             for (const tw of vis) {
                 c.beginPath();
-                c.arc(toX(tw.wx), toY(tw.wy), tw.range * scale, 0, TAU);
+                c.arc(toX(tw.wx), toY(tw.wy), tw.range * scale2d, 0, TAU);
                 c.stroke();
             }
         }
@@ -401,7 +540,7 @@
                 const p = (t * 0.45 + i / 3) % 1;
                 c.strokeStyle = `rgba(255,255,255,${(1 - p) * 0.7})`;
                 c.beginPath();
-                c.arc(toX(selected.wx), toY(selected.wy), p * selected.range * scale, 0, TAU);
+                c.arc(toX(selected.wx), toY(selected.wy), p * selected.range * scale2d, 0, TAU);
                 c.stroke();
             }
         }
@@ -410,7 +549,7 @@
             const p = (t * 0.3) % 1;
             c.strokeStyle = `rgba(255,255,255,${(1 - p) * 0.4})`;
             c.beginPath();
-            c.arc(toX(userWorld[0]), toY(userWorld[1]), p * 400 * scale, 0, TAU);
+            c.arc(toX(userWorld[0]), toY(userWorld[1]), p * 400 * scale2d, 0, TAU);
             c.stroke();
         }
 
@@ -433,36 +572,29 @@
     }
 
     function drawGrid2D(c, W, H, stepM, style) {
-        const step = stepM * scale;
+        const step = stepM * scale2d;
         if (step < 8) return;
         c.strokeStyle = style;
         c.lineWidth = 1;
-        const x0 = ((W / 2 - center[0] * scale) % step + step) % step;
+        const x0 = ((W / 2 - center[0] * scale2d) % step + step) % step;
         for (let x = x0; x < W; x += step) {
             c.beginPath(); c.moveTo(x, 0); c.lineTo(x, H); c.stroke();
         }
-        const y0 = ((H / 2 + center[1] * scale) % step + step) % step;
+        const y0 = ((H / 2 + center[1] * scale2d) % step + step) % step;
         for (let y = y0; y < H; y += step) {
             c.beginPath(); c.moveTo(0, y); c.lineTo(W, y); c.stroke();
         }
     }
 
-    // ── Map interaction ──
-    function screenToWorld(clientX, clientY) {
-        const rect = canvas.getBoundingClientRect();
-        const px = (clientX - rect.left) * dpr;
-        const py = (rect.bottom - clientY) * dpr; // GL y-up
-        return [
-            (px - canvas.width / 2) / scale + center[0],
-            (py - canvas.height / 2) / scale + center[1],
-        ];
-    }
-
-    let dragging = false, moved = false, lastXY = null, pinchDist = null;
+    // ══════════════════════════════════════════
+    //  Interaction
+    // ══════════════════════════════════════════
+    let dragging = false, dragMode = 'orbit', moved = false, lastXY = null, pinchDist = null;
 
     canvas.addEventListener('pointerdown', (e) => {
         dragging = true;
         moved = false;
+        dragMode = (e.shiftKey || !gl) ? 'pan' : 'orbit';
         lastXY = [e.clientX, e.clientY];
         canvas.setPointerCapture(e.pointerId);
     });
@@ -471,8 +603,23 @@
         if (!dragging) return;
         const dx = e.clientX - lastXY[0], dy = e.clientY - lastXY[1];
         if (Math.abs(dx) + Math.abs(dy) > 3) moved = true;
-        center[0] -= dx * dpr / scale;
-        center[1] += dy * dpr / scale;
+
+        if (gl) {
+            if (dragMode === 'orbit') {
+                camAz += dx * 0.005;
+                camEl = Math.min(1.5, Math.max(0.15, camEl + dy * 0.005));
+            } else {
+                // pan along camera-aligned ground axes
+                const k = camDist / canvas.clientHeight * 1.4;
+                const right = [Math.cos(camAz), Math.sin(camAz)];
+                const fwd = [-Math.sin(camAz), Math.cos(camAz)];
+                center[0] += (-dx * right[0] + dy * fwd[0]) * k;
+                center[1] += (-dx * right[1] + dy * fwd[1]) * k;
+            }
+        } else {
+            center[0] -= dx * dpr / scale2d;
+            center[1] += dy * dpr / scale2d;
+        }
         lastXY = [e.clientX, e.clientY];
     });
 
@@ -483,11 +630,11 @@
 
     canvas.addEventListener('wheel', (e) => {
         e.preventDefault();
-        const before = screenToWorld(e.clientX, e.clientY);
-        scale = Math.min(8, Math.max(0.01, scale * Math.exp(-e.deltaY * 0.0012)));
-        const after = screenToWorld(e.clientX, e.clientY);
-        center[0] += before[0] - after[0];
-        center[1] += before[1] - after[1];
+        if (gl) {
+            camDist = Math.min(30000, Math.max(300, camDist * Math.exp(e.deltaY * 0.0012)));
+        } else {
+            scale2d = Math.min(8, Math.max(0.01, scale2d * Math.exp(-e.deltaY * 0.0012)));
+        }
     }, { passive: false });
 
     canvas.addEventListener('touchmove', (e) => {
@@ -497,7 +644,9 @@
                 e.touches[0].clientX - e.touches[1].clientX,
                 e.touches[0].clientY - e.touches[1].clientY);
             if (pinchDist) {
-                scale = Math.min(8, Math.max(0.01, scale * (d / pinchDist)));
+                const f = d / pinchDist;
+                if (gl) camDist = Math.min(30000, Math.max(300, camDist / f));
+                else scale2d = Math.min(8, Math.max(0.01, scale2d * f));
             }
             pinchDist = d;
         }
@@ -505,12 +654,29 @@
     canvas.addEventListener('touchend', () => { pinchDist = null; });
 
     function pick(clientX, clientY) {
-        const w = screenToWorld(clientX, clientY);
-        const maxDist = 16 * dpr / scale; // 16 px hit radius in meters
-        let best = null, bestD = maxDist;
-        for (const t of visibleTowers()) {
-            const d = Math.hypot(t.wx - w[0], t.wy - w[1]);
-            if (d < bestD) { bestD = d; best = t; }
+        const rect = canvas.getBoundingClientRect();
+        const px = (clientX - rect.left) * dpr;
+        const py = (clientY - rect.top) * dpr;
+        let best = null, bestD = 18 * dpr;
+
+        if (gl && vpMat) {
+            for (const t of visibleTowers()) {
+                for (const z of [0, beamHeight(t)]) {
+                    const s = worldToScreen(t.wx, t.wy, z);
+                    if (!s) continue;
+                    const d = Math.hypot(s[0] - px, s[1] - py);
+                    if (d < bestD) { bestD = d; best = t; }
+                }
+            }
+        } else {
+            const wx = (px - canvas.width / 2) / scale2d + center[0];
+            const wy = (canvas.height / 2 - py) / scale2d + center[1];
+            const maxM = 18 * dpr / scale2d;
+            let bd = maxM;
+            for (const t of visibleTowers()) {
+                const d = Math.hypot(t.wx - wx, t.wy - wy);
+                if (d < bd) { bd = d; best = t; }
+            }
         }
         selectTower(best);
     }
@@ -544,7 +710,7 @@
         }
     }
 
-    // Direct fetch first; if it fails on CORS/network, retry through a CORS proxy.
+    // Direct fetch first; if blocked by CORS/network, retry through a proxy.
     async function fetchJSON(url) {
         try {
             const r = await fetch(url);
@@ -589,7 +755,7 @@
         const radioMap = { '5G': 'NR', '4G': 'LTE', '3G': 'UMTS', '2G': 'GSM' };
         const out = [];
         for (let i = 0; i < 70; i++) {
-            const angle = Math.random() * Math.PI * 2;
+            const angle = Math.random() * TAU;
             const dist = Math.pow(Math.random(), 0.7) * searchRadiusKm * 0.85;
             const lat = centerLat + (dist / 111.32) * Math.cos(angle);
             const lng = centerLng + (dist / (111.32 * Math.cos(centerLat * Math.PI / 180))) * Math.sin(angle);
@@ -614,7 +780,7 @@
     function onTowersLoaded() {
         selected = null;
         renderDetail();
-        rebuildTowerBuffer();
+        rebuildBuffers();
         renderCensus();
         renderStack();
     }
@@ -739,7 +905,6 @@
     // ── Controls ──
     function start() {
         if (started) {
-            // restart scan with current mode
             origin = null;
             if (watchId !== null) navigator.geolocation.clearWatch(watchId);
             startLocation();
@@ -748,10 +913,6 @@
         started = true;
         startLocation();
     }
-
-    // The latent map renders from the first frame — access only adds data.
-    initGL();
-    if (gl || ctx2d) startLoop();
 
     $('btn-access').addEventListener('click', (e) => {
         e.preventDefault();
@@ -788,7 +949,8 @@
         e.preventDefault();
         if (userWorld) {
             center = [...userWorld];
-            scale = 0.15;
+            camDist = 4200;
+            scale2d = 0.15;
         }
     });
 
@@ -800,7 +962,7 @@
     ['f-5g', 'f-4g', 'f-3g', 'f-2g'].forEach((id) => {
         $(id).addEventListener('change', () => {
             if (selected && !$('f-' + selected.tech.toLowerCase()).checked) selectTower(null);
-            rebuildTowerBuffer();
+            rebuildBuffers();
         });
     });
 
@@ -812,5 +974,9 @@
     radiusInput.addEventListener('change', () => {
         if (origin) fetchTowers(origin.lat, origin.lng);
     });
+
+    // The latent map renders from the first frame — access only adds data.
+    initGL();
+    if (gl || ctx2d) startLoop();
 
 })();

@@ -231,6 +231,10 @@ a.action {
     letter-spacing: 0.05em;
 }
 
+.gl-error[hidden] {
+    display: none;
+}
+
 /* ── Census ── */
 .census {
     width: 100%;
@@ -356,6 +360,25 @@ a.action {
 }
 
 /* ── Responsive ── */
+/* Wide screens: all four columns fit the viewport, no horizontal scroll */
+@media (min-width: 1101px) {
+    #columns {
+        overflow-x: hidden;
+    }
+    .col-about  { width: 25vw; }
+    .col-map    { width: 42vw; min-width: 0; }
+    .col-census { width: 14vw; }
+    .col-stack  { width: 19vw; border-right: none; }
+    .col-census .col-body,
+    .col-stack .col-body {
+        padding: 1rem;
+    }
+    .col-census .col-header,
+    .col-stack .col-header {
+        padding: 0.9rem 1rem;
+    }
+}
+
 @media (max-width: 768px) {
     #columns {
         scroll-snap-type: x mandatory;
