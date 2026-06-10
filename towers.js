@@ -63,16 +63,19 @@
     //  WebGL
     // ══════════════════════════════════════════
     const glOpts = { antialias: true, alpha: false };
-    const gl = canvas.getContext('webgl', glOpts)
-        || canvas.getContext('webgl2', glOpts)
-        || canvas.getContext('experimental-webgl', glOpts);
+    function tryContext(type) {
+        try { return canvas.getContext(type, glOpts); } catch (e) { return null; }
+    }
+    const gl = tryContext('webgl') || tryContext('webgl2') || tryContext('experimental-webgl');
 
     // Canvas 2D fallback for browsers without WebGL (e.g. Safari Lockdown Mode)
     let ctx2d = null;
     if (!gl) {
-        ctx2d = canvas.getContext('2d');
+        try { ctx2d = canvas.getContext('2d'); } catch (e) { /* no canvas at all */ }
         if (!ctx2d) $('gl-error').hidden = false;
     }
+    $('gl-error').hidden = !!(gl || ctx2d);
+    setStatus(gl ? 'Standby — WebGL' : (ctx2d ? 'Standby — 2D mode' : 'No canvas support'));
 
     function compile(type, src) {
         const sh = gl.createShader(type);
